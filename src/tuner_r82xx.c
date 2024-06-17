@@ -1059,7 +1059,9 @@ int r82xx_set_vga_gain(struct r82xx_priv *priv) {
 	int rc;
 
 	/* set fixed VGA gain based on frequency */
-	if (priv->rf_freq > MHZ(1350)) {
+	/* Disable for now. While it improves performance in some applications
+	   it appears to severely degrade performance in others */
+	/*if (priv->rf_freq > MHZ(1350)) {
 		rc = r82xx_write_reg_mask(priv, 0x0c, 0x0f, 0x9f); // Max 40.5 dB
 	}
 	else if (priv->rf_freq > MHZ(1000)) {
@@ -1067,7 +1069,9 @@ int r82xx_set_vga_gain(struct r82xx_priv *priv) {
 	}
 	else {
 		rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); // 16.3 dB
-	}
+	}*/
+
+	rc = r82xx_write_reg_mask(priv, 0x0c, 0x08, 0x9f); // 16.3 dB
 
 	return rc;
 }
