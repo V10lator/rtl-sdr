@@ -465,6 +465,9 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
+	rtlsdr_close(dev);
+	dev = NULL;
+
 #ifndef _WIN32
 	sigact.sa_handler = sighandler;
 	sigemptyset(&sigact.sa_mask);
@@ -477,53 +480,6 @@ int main(int argc, char **argv)
 #else
 	SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
 #endif
-
-	/* Set direct sampling */
-        if (direct_sampling)
-                verbose_direct_sampling(dev, 2);
-
-	/* Set the tuner error */
-	verbose_ppm_set(dev, ppm_error);
-
-	/* Set the sample rate */
-	r = rtlsdr_set_sample_rate(dev, samp_rate);
-	if (r < 0)
-		fprintf(stderr, "WARNING: Failed to set sample rate.\n");
-
-	/* Set the frequency */
-	r = rtlsdr_set_center_freq(dev, frequency);
-	if (r < 0)
-		fprintf(stderr, "WARNING: Failed to set center freq.\n");
-	else
-		fprintf(stderr, "Tuned to %i Hz.\n", frequency);
-
-	if (0 == gain) {
-		 /* Enable automatic gain */
-		r = rtlsdr_set_tuner_gain_mode(dev, 0);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to enable automatic gain.\n");
-	} else {
-		/* Enable manual gain */
-		r = rtlsdr_set_tuner_gain_mode(dev, 1);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to enable manual gain.\n");
-
-		/* Set the tuner gain */
-		r = rtlsdr_set_tuner_gain(dev, gain);
-		if (r < 0)
-			fprintf(stderr, "WARNING: Failed to set tuner gain.\n");
-		else
-			fprintf(stderr, "Tuner gain set to %f dB.\n", gain/10.0);
-	}
-
-	rtlsdr_set_bias_tee(dev, enable_biastee);
-	if (enable_biastee)
-		fprintf(stderr, "activated bias-T on GPIO PIN 0\n");
-
-	/* Reset endpoint before we start reading from it (mandatory) */
-	r = rtlsdr_reset_buffer(dev);
-	if (r < 0)
-		fprintf(stderr, "WARNING: Failed to reset buffers.\n");
 
 	pthread_mutex_init(&exit_cond_lock, NULL);
 	pthread_mutex_init(&exit_cond_lock, NULL);
@@ -615,6 +571,58 @@ int main(int argc, char **argv)
 			    remportinfo, NI_MAXSERV, NI_NUMERICSERV);
 		printf("client accepted! %s %s\n", remhostinfo, remportinfo);
 
+		rtlsdr_open(&dev, (uint32_t)dev_index);
+		if (NULL == dev) {
+			fprintf(stderr, "Failed to open rtlsdr device #%d.\n", dev_index);
+			goto client_reset;
+		}
+		/* Set direct sampling */
+		if (direct_sampling)
+			verbose_direct_sampling(dev, 2);
+
+		/* Set the tuner error */
+		verbose_ppm_set(dev, ppm_error);
+
+		/* Set the sample rate */
+		r = rtlsdr_set_sample_rate(dev, samp_rate);
+		if (r < 0)
+			fprintf(stderr, "WARNING: Failed to set sample rate.\n");
+
+		/* Set the frequency */
+		r = rtlsdr_set_center_freq(dev, frequency);
+		if (r < 0)
+			fprintf(stderr, "WARNING: Failed to set center freq.\n");
+		else
+			fprintf(stderr, "Tuned to %i Hz.\n", frequency);
+
+		if (0 == gain) {
+			 /* Enable automatic gain */
+			r = rtlsdr_set_tuner_gain_mode(dev, 0);
+			if (r < 0)
+				fprintf(stderr, "WARNING: Failed to enable automatic gain.\n");
+		} else {
+			/* Enable manual gain */
+			r = rtlsdr_set_tuner_gain_mode(dev, 1);
+			if (r < 0)
+				fprintf(stderr, "WARNING: Failed to enable manual gain.\n");
+
+			/* Set the tuner gain */
+			r = rtlsdr_set_tuner_gain(dev, gain);
+			if (r < 0)
+				fprintf(stderr, "WARNING: Failed to set tuner gain.\n");
+			else
+				fprintf(stderr, "Tuner gain set to %f dB.\n", gain/10.0);
+		}
+
+		rtlsdr_set_bias_tee(dev, enable_biastee);
+		if (enable_biastee)
+			fprintf(stderr, "activated bias-T on GPIO PIN 0\n");
+
+		/* Reset endpoint before we start reading from it (mandatory) */
+		r = rtlsdr_reset_buffer(dev);
+		if (r < 0)
+			fprintf(stderr, "WARNING: Failed to reset buffers.\n");
+
 		memset(&dongle_info, 0, sizeof(dongle_info));
 		memcpy(&dongle_info.magic, "RTL0", 4);
 
@@ -640,7 +648,7 @@ int main(int argc, char **argv)
 
 		pthread_join(tcp_worker_thread, &status);
 		pthread_join(command_thread, &status);
-
+client_reset:
 		closesocket(s);
 
 		printf("all threads dead..\n");
@@ -648,7 +656,8 @@ int main(int argc, char **argv)
 		// Clear stale data for next client
 		ringbuf_head = ringbuf_tail = 0;
 		memset(ringbuf, 0, ringbuf_sz);
-
+		rtlsdr_close(dev);
+		dev = NULL;
 		do_exit = 0;
 	}
 
