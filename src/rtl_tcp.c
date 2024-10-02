@@ -160,31 +160,27 @@ void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 
 	if(!do_exit) {
 		unsigned int bufferleft;
-
-		if (ringbuf == NULL)
-		{
-			printf("Allocate %d bytes for ringbuf.\n", ringbuf_sz);
-			ringbuf = (unsigned char*)malloc(ringbuf_sz);
-		}
-
-		bufferleft = ringbuf_sz - ((ringbuf_head < ringbuf_tail) ? (ringbuf_head - ringbuf_tail + ringbuf_sz) : (ringbuf_head - ringbuf_tail));
+		// Cache locally
+		const unsigned int rb_head = ringbuf_head;
+		const unsigned int rb_tail = ringbuf_tail;
+		bufferleft = ringbuf_sz - ((rb_head < rb_tail) ? (rb_head - rb_tail + ringbuf_sz) : (rb_head - rb_tail));
 		if (len < bufferleft)
 		{
-			if ((ringbuf_head+len) < (unsigned int)ringbuf_sz)
+			if ((rb_head+len) < (unsigned int)ringbuf_sz)
 			{
-				memcpy(((unsigned char*)(ringbuf+ringbuf_head)), buf, len);
+				memcpy(((unsigned char*)(ringbuf+rb_head)), buf, len);
 			}
 			else
 			{
-				memcpy(((unsigned char*)ringbuf+ringbuf_head), buf, ringbuf_sz-ringbuf_head);
-				memcpy((unsigned char*)ringbuf, buf+(ringbuf_sz-ringbuf_head), len-(ringbuf_sz-ringbuf_head));
+				memcpy(((unsigned char*)ringbuf+rb_head), buf, ringbuf_sz-rb_head);
+				memcpy((unsigned char*)ringbuf, buf+(ringbuf_sz-rb_head), len-(ringbuf_sz-rb_head));
 			}
-			ringbuf_head = (ringbuf_head + len) % ringbuf_sz;
+			ringbuf_head = (rb_head + len) % ringbuf_sz;
 		}
 		else
 		{
-			printf("overrun: head=%d tail=%d, Trimming %d bytes from tail of buffer\n", ringbuf_head, ringbuf_tail, ringbuf_trimsz);
-			ringbuf_tail = (ringbuf_tail + ringbuf_trimsz) % ringbuf_sz;
+			printf("overrun: head=%d tail=%d, Trimming %d bytes from tail of buffer\n", rb_head, rb_tail, ringbuf_trimsz);
+			ringbuf_tail = (rb_tail + ringbuf_trimsz) % ringbuf_sz;
 		}
 
 		total_radio_bytes += len;
@@ -194,7 +190,7 @@ void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 			int nsecs = curtime - lasttime;
 			int nbytes = total_radio_bytes - lastbytes;
 			int bytes_in_flight = (ringbuf_head - ringbuf_tail);
-		   if (bytes_in_flight < 0)
+		    if (bytes_in_flight < 0)
 				bytes_in_flight = ringbuf_sz + bytes_in_flight;
 			lasttime=curtime;
 			lastbytes=total_radio_bytes;
@@ -218,9 +214,13 @@ static void *tcp_worker(void *arg)
 		if(do_exit)
 			pthread_exit(0);
 
-		bytesleft = (ringbuf_head < ringbuf_tail) ?
-		            (ringbuf_head - ringbuf_tail + ringbuf_sz) :
-					(ringbuf_head - ringbuf_tail);
+		// Cache locally
+		const unsigned int rb_head = ringbuf_head;
+		unsigned int rb_tail = ringbuf_tail;
+
+		bytesleft = (rb_head < rb_tail) ?
+		            (rb_head - rb_tail + ringbuf_sz) :
+					(rb_head - rb_tail);
 		while (bytesleft > 0)
 		{
 		   FD_ZERO(&writefds);
@@ -230,15 +230,16 @@ static void *tcp_worker(void *arg)
 		   r = select(s+1, NULL, &writefds, NULL, &tv);
 		   if(r) {
 			  unsigned int sendchunk;
-			  if (ringbuf_tail < ringbuf_head)
-				 sendchunk = ringbuf_head - ringbuf_tail;
+			  if (rb_tail < rb_head)
+				 sendchunk = ringbuf_head - rb_tail;
 			  else
-				 sendchunk = ringbuf_sz - ringbuf_tail;
+				 sendchunk = ringbuf_sz - rb_tail;
 			  if (sendchunk > max_bytes_in_flight)
 				 max_bytes_in_flight = sendchunk;
-			  bytessent = send(s,  (unsigned char*)(ringbuf+ringbuf_tail), sendchunk, 0);
+			  bytessent = send(s,  (unsigned char*)(ringbuf+rb_tail), sendchunk, 0);
 			  bytesleft -= bytessent;
-			  ringbuf_tail = (ringbuf_tail + bytessent) % ringbuf_sz;
+			  rb_tail = (rb_tail + bytessent) % ringbuf_sz;
+			  ringbuf_tail = rb_tail;
 		   }
 		   if(bytessent == SOCKET_ERROR || do_exit) {
 			  printf("worker socket bye\n");
@@ -572,6 +573,16 @@ int main(int argc, char **argv)
 	r = fcntl(listensocket, F_GETFL, 0);
 	r = fcntl(listensocket, F_SETFL, r | O_NONBLOCK);
 #endif
+
+	if (ringbuf == NULL)
+	{
+		printf("Allocate %d bytes for ringbuf.\n", ringbuf_sz);
+		ringbuf = (unsigned char*)malloc(ringbuf_sz);
+		if (ringbuf == NULL)
+		{
+			goto out;
+		}
+	}
 
 	while(1) {
 		printf("listening...\n");
