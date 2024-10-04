@@ -67,6 +67,7 @@ static pthread_t command_thread;
 static pthread_cond_t exit_cond;
 static pthread_mutex_t exit_cond_lock;
 
+static pthread_mutex_t ll_mutex;
 static pthread_cond_t cond;
 
 typedef struct { /* structure size must be multiple of 2 bytes */
@@ -198,6 +199,9 @@ void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 				(float)nbytes/(float)nsecs/1000.0/1000.0, bytes_in_flight/1024, max_bytes_in_flight/1024);
 			max_bytes_in_flight=0;
 		}
+		pthread_mutex_lock(&ll_mutex);
+		pthread_cond_signal(&cond);
+		pthread_mutex_unlock(&ll_mutex);
 	}
 }
 
@@ -213,6 +217,20 @@ static void *tcp_worker(void *arg)
 	while(1) {
 		if(do_exit)
 			pthread_exit(0);
+
+		pthread_mutex_lock(&ll_mutex);
+		gettimeofday(&tp, NULL);
+		ts.tv_sec  = tp.tv_sec+5;
+		ts.tv_nsec = tp.tv_usec * 1000;
+		r = pthread_cond_timedwait(&cond, &ll_mutex, &ts);
+		if(r == ETIMEDOUT) {
+			pthread_mutex_unlock(&ll_mutex);
+			printf("worker cond timeout\n");
+			sighandler(0);
+			pthread_exit(NULL);
+		}
+
+		pthread_mutex_unlock(&ll_mutex);
 
 		// Cache locally
 		const unsigned int rb_head = ringbuf_head;
@@ -231,7 +249,7 @@ static void *tcp_worker(void *arg)
 		   if(r) {
 			  unsigned int sendchunk;
 			  if (rb_tail < rb_head)
-				 sendchunk = ringbuf_head - rb_tail;
+				 sendchunk = rb_head - rb_tail;
 			  else
 				 sendchunk = ringbuf_sz - rb_tail;
 			  if (sendchunk > max_bytes_in_flight)
@@ -481,7 +499,7 @@ int main(int argc, char **argv)
 	SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
 #endif
 
-	pthread_mutex_init(&exit_cond_lock, NULL);
+	pthread_mutex_init(&ll_mutex, NULL);
 	pthread_mutex_init(&exit_cond_lock, NULL);
 	pthread_cond_init(&cond, NULL);
 	pthread_cond_init(&exit_cond, NULL);
