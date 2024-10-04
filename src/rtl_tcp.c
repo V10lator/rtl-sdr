@@ -30,6 +30,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <semaphore.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <fcntl.h>
@@ -67,8 +68,7 @@ static pthread_t command_thread;
 static pthread_cond_t exit_cond;
 static pthread_mutex_t exit_cond_lock;
 
-static pthread_mutex_t ll_mutex;
-static pthread_cond_t cond;
+static sem_t cond;
 
 typedef struct { /* structure size must be multiple of 2 bytes */
 	char magic[4];
@@ -199,9 +199,7 @@ void rtlsdr_callback(unsigned char *buf, uint32_t len, void *ctx)
 				(float)nbytes/(float)nsecs/1000.0/1000.0, bytes_in_flight/1024, max_bytes_in_flight/1024);
 			max_bytes_in_flight=0;
 		}
-		pthread_mutex_lock(&ll_mutex);
-		pthread_cond_signal(&cond);
-		pthread_mutex_unlock(&ll_mutex);
+		sem_post(&cond);
 	}
 }
 
@@ -218,19 +216,15 @@ static void *tcp_worker(void *arg)
 		if(do_exit)
 			pthread_exit(0);
 
-		pthread_mutex_lock(&ll_mutex);
 		gettimeofday(&tp, NULL);
 		ts.tv_sec  = tp.tv_sec+5;
 		ts.tv_nsec = tp.tv_usec * 1000;
-		r = pthread_cond_timedwait(&cond, &ll_mutex, &ts);
+		r = sem_timedwait(&cond, &ts);
 		if(r == ETIMEDOUT) {
-			pthread_mutex_unlock(&ll_mutex);
 			printf("worker cond timeout\n");
 			sighandler(0);
 			pthread_exit(NULL);
 		}
-
-		pthread_mutex_unlock(&ll_mutex);
 
 		// Cache locally
 		const unsigned int rb_head = ringbuf_head;
@@ -499,10 +493,10 @@ int main(int argc, char **argv)
 	SetConsoleCtrlHandler( (PHANDLER_ROUTINE) sighandler, TRUE );
 #endif
 
-	pthread_mutex_init(&ll_mutex, NULL);
 	pthread_mutex_init(&exit_cond_lock, NULL);
-	pthread_cond_init(&cond, NULL);
 	pthread_cond_init(&exit_cond, NULL);
+
+	sem_init(&cond, 0, 0);
 
 	hints.ai_flags  = AI_PASSIVE; /* Server mode. */
 	hints.ai_family = PF_UNSPEC;  /* IPv4 or IPv6. */
